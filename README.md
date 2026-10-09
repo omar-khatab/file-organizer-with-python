@@ -1,163 +1,60 @@
 # File Organizer with Python
 
-> A clean, automated Python utility to organize cluttered Desktop and Downloads folders.
+Windows-focused file automation that organizes Desktop and Downloads into 11 clean categories. Built to clean up my own cluttered Downloads folder, and I still use it daily.
 
-[[Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)
-[[License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+## Why standalone?
 
-**GitHub:** [github.com/omar-khatab/file-organizer-with-python](https://github.com/omar-khatab/file-organizer-with-python)
+**Each script is standalone by design: download one file and run it, no setup.**
 
----
+No `common.py`, no dependencies. Duplication of categories is intentional to avoid `ImportError` for regular users.
 
-## 🚀 Overview
+## Features
 
-Simple Python scripts to automatically organize messy Desktop and Downloads folders into 11 categorized directories.
+- **Smart path detection**
+  - Desktop: `~/Desktop`, `~/OneDrive/Desktop`, Registry fallback via `winreg`
+  - Downloads: `Path.home() / "Downloads"`
+- **11 unified categories, 60+ extensions**
+  - `01_PDFs`, `02_Documents`, `03_Sheets`, `04_Presentations`, `05_Images`, `06_Archives`, `07_Programs`, `08_Videos`, `09_Code`, `10_Shortcuts`, `11_Others`
+- **Safe**
+  - `get_unique_path()`: `file.txt` → `file (1).txt`
+  - True `--dry-run` with `argparse`
+  - Skips itself (works as .py and .exe), preserves folders
 
-No dependencies - uses only Python standard library (`pathlib`, `shutil`, `os`).
+## Usage
 
----
-
-## ✨ Features
-
-- **11 Categories** - 40+ file extensions (PDFs, Images, Code, Shortcuts, Others)
-- **Duplicate Handling** - Never overwrites: `report.pdf` → `report (1).pdf`
-- **Dry-Run Mode** - Preview before moving
-- **Preserves Folders** - Only moves files
-- **Clean Desktop** - Organizes into `00_Desktop_Organized` to keep desktop clean
-- **Unknown Files** - Goes to `11_Others_Unknown`
-
----
-
-## 📁 Project Structure
-
-```
-file-organizer-with-python/
-├── Organize-Desktop.py        # Desktop organizer
-├── Organize-Downloads.py      # Downloads organizer
-├── README.md
-└── LICENSE
-```
-
----
-
-## 📦 Installation
-
+### Python version
 ```bash
-git clone https://github.com/omar-khatab/file-organizer-with-python.git
-cd file-organizer-with-python
-```
-
-Requires Python 3.8+
-
----
-
-## 🎯 Usage
-
-### 1. Desktop Organizer
-
-```bash
-python Organize-Desktop.py
-```
-
-**Before:**
-```
-Desktop/
-├── report.pdf
-├── photo.jpg
-└── script.py
-```
-
-**After:**
-```
-Desktop/
-└── 00_Desktop_Organized/
-    ├── 01_PDFs/report.pdf
-    ├── 05_Images/photo.jpg
-    └── 09_Code/script.py
-```
-
-Enable dry-run:
-```python
-organize_desktop(dry_run=True, move_shortcuts=False)
-```
-
-### 2. Downloads Organizer
-
-```bash
+python Organize-Downloads.py --dry-run
 python Organize-Downloads.py
+python Organize-Desktop.py --dry-run --move-shortcuts
 ```
 
-```
-Downloads/
-├── 01_PDFs/
-├── 05_Images/
-├── 09_Code/
-├── 10_Shortcuts/
-└── 11_Others_Unknown/
-```
+### EXE version (no Python needed)
 
-Enable dry-run:
-```python
-organize(dry_run=True)
-```
+1. Download `Organize-Downloads.exe` or `Organize-Desktop.exe` from [Releases](https://github.com/omar-khatab/file-organizer-with-python/releases)
+2. Place it in Downloads/Desktop folder and double-click
+3. Or run from terminal with `--dry-run` flag
 
----
+> **Note on Windows SmartScreen / Antivirus:** The `.exe` files are built with PyInstaller and are not code-signed, so Windows may show a SmartScreen warning ("Unknown publisher") or your antivirus may flag it. This is normal for unsigned PyInstaller binaries. You can click "More info" → "Run anyway" if you trust the source. Source code is fully available here for review.
 
-## 🗂️ Categories
+## Flags
 
-| Folder | Extensions |
-|--------|------------|
-| `01_PDFs` | `.pdf` |
-| `02_Word_Docs` | `.doc`, `.docx`, `.txt` |
-| `03_Excel_Sheets` | `.xls`, `.xlsx`, `.csv` |
-| `04_PowerPoint` | `.ppt`, `.pptx` |
-| `05_Images` | `.jpg`, `.png`, `.gif`, `.svg`, `.webp`, `.ico` |
-| `06_Zip_Files` | `.zip`, `.rar`, `.7z`, `.tar`, `.gz` |
-| `07_Programs` | `.exe`, `.msi`, `.dmg`, `.apk` |
-| `08_Videos` | `.mp4`, `.mkv`, `.mov`, `.avi`, `.wmv` |
-| `09_Code` | `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.html`, `.css`, `.json`, `.xml`, `.yml`, `.sql`, `.ipynb` + more |
-| `10_Shortcuts` | `.lnk`, `.url` |
-| `11_Others_Unknown` | Any other extension |
+- `--dry-run`: preview only
+- `--move-shortcuts`: include `.lnk`, `.url` (Desktop only)
 
----
+## Build EXE yourself
 
-## 🧠 How It Works
-
-**1. Collision Handling**
-```python
-def get_unique_path(dest):
-    # report.pdf -> report (1).pdf
+```bash
+pip install pyinstaller
+pyinstaller --onefile --name Organize-Downloads Organize-Downloads.py
+pyinstaller --onefile --name Organize-Desktop Organize-Desktop.py
 ```
 
-**2. Organization Logic**
-```python
-for item in DOWNLOADS_PATH.iterdir():
-    if item.is_dir():
-        continue
-    target = CATEGORIES.get(ext) or UNKNOWN_FOLDER
-    shutil.move(item, target)
+## Structure
+
 ```
-
----
-
-## 🛡️ Safety
-
-- Dry-run preview
-- Skips the script itself
-- Preserves all folders
-- No overwrite
-- Try/except for errors
-
----
-
-## 👨‍💻 Author
-
-**Omar Khatab** - [GitHub](https://github.com/omar-khatab)
-
-Mechanical Power Engineering (Ain Shams University)
-
----
-
-## ⭐ Support
-
-If this helped you, give it a ⭐ on GitHub!
+├── Organize-Desktop.py
+├── Organize-Downloads.py
+├── .github/workflows/build.yml
+└── README.md
+```

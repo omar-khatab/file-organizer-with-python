@@ -1,12 +1,14 @@
 """
 File Organizer - Downloads Organizer (Windows)
 Author: Omar Khatab
-Built to clean up my own cluttered Downloads, still use it myself.
-Standalone - download one file and run it.
+GitHub: https://github.com/omar-khatab/file-organizer-with-python
+Description: Built to clean up my own cluttered Downloads folder, and I still use it myself.
+Design: Each script is standalone by design: download one file and run it, no setup.
 """
 
 import argparse
 import shutil
+import sys
 from pathlib import Path
 
 CATEGORIES = {
@@ -42,18 +44,20 @@ def get_unique_path(destination: Path) -> Path:
 
 
 DOWNLOADS_PATH = Path.home() / "Downloads"
+# Fix for .exe: when frozen, executable name is Organize-Downloads.exe not .py
+SELF_NAME = Path(sys.executable).name if getattr(sys, "frozen", False) else Path(__file__).name
 
 def organize(dry_run: bool = False) -> None:
     if not DOWNLOADS_PATH.exists():
-        print(f"[Error] Downloads not found: {DOWNLOADS_PATH}")
+        print(f"[Error] Downloads folder not found: {DOWNLOADS_PATH}")
         return
     print(f"--- Organizing Downloads: {DOWNLOADS_PATH} ---")
     if dry_run:
-        print(">>> DRY RUN - No folders/files will be created or moved <<<\n")
+        print(">>> DRY RUN MODE - No folders/files will be created or moved <<<\n")
     moved = 0
     preview_folders: set[str] = set()
     for item in DOWNLOADS_PATH.iterdir():
-        if item.name == Path(__file__).name:
+        if item.name == SELF_NAME:
             continue
         if item.is_dir():
             continue
@@ -83,6 +87,9 @@ def organize(dry_run: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Organize Downloads by file type.")
-    parser.add_argument("--dry-run", action="store_true", help="Preview only")
+    parser.add_argument("--dry-run", action="store_true", help="Preview only, no files moved")
     args = parser.parse_args()
     organize(dry_run=args.dry_run)
+    # Keep window open when double-clicked as .exe
+    if getattr(sys, "frozen", False):
+        input("\nPress Enter to exit...")

@@ -1,12 +1,14 @@
 """
 File Organizer - Desktop Organizer (Windows)
-Built to clean up my own cluttered Desktop, still use it.
-Standalone - download one file and run it.
+Author: Omar Khatab
+Description: Built to clean up my own cluttered Desktop, and I still use it myself.
+Design: Each script is standalone by design: download one file and run it, no setup.
 """
 
 import argparse
 import os
 import shutil
+import sys
 from pathlib import Path
 
 CATEGORIES = {
@@ -65,7 +67,17 @@ def find_desktop() -> Path:
 
 DESKTOP_PATH = find_desktop()
 ORGANIZED_ROOT = DESKTOP_PATH / "00_Desktop_Organized"
-IGNORE = ["00_Desktop_Organized", "Organize-Desktop.py", "Organize-Downloads.py"]
+# Include .exe names to avoid self-move when running as exe
+IGNORE = [
+    "00_Desktop_Organized",
+    "Organize-Desktop.py",
+    "Organize-Downloads.py",
+    "Organize-Desktop.exe",
+    "Organize-Downloads.exe",
+]
+
+# Fix for .exe self-detection
+SELF_NAME = Path(sys.executable).name if getattr(sys, "frozen", False) else Path(__file__).name
 
 def organize_desktop(dry_run: bool = False, move_shortcuts: bool = False) -> None:
     print(f"Desktop location: {DESKTOP_PATH}")
@@ -73,14 +85,14 @@ def organize_desktop(dry_run: bool = False, move_shortcuts: bool = False) -> Non
         print(f"[Error] Desktop not found: {DESKTOP_PATH}")
         return
     if dry_run:
-        print(">>> DRY RUN - No folders/files will be created or moved <<<\n")
+        print(">>> DRY RUN MODE - No folders/files will be created or moved <<<\n")
     else:
         ORGANIZED_ROOT.mkdir(exist_ok=True)
         print(f"--- Organizing Desktop: {DESKTOP_PATH} ---\n")
     moved = 0
     preview_folders: set[str] = set()
     for item in DESKTOP_PATH.iterdir():
-        if item.name in IGNORE or item.name.startswith("00_") or item.name in CATEGORIES or item.name == UNKNOWN_FOLDER:
+        if item.name == SELF_NAME or item.name in IGNORE or item.name.startswith("00_") or item.name in CATEGORIES or item.name == UNKNOWN_FOLDER:
             continue
         if item.is_dir():
             continue
@@ -112,7 +124,9 @@ def organize_desktop(dry_run: bool = False, move_shortcuts: bool = False) -> Non
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Organize Desktop files (Windows).")
-    parser.add_argument("--dry-run", action="store_true", help="Preview only")
-    parser.add_argument("--move-shortcuts", action="store_true", help="Include shortcuts")
+    parser.add_argument("--dry-run", action="store_true", help="Preview only, no files moved")
+    parser.add_argument("--move-shortcuts", action="store_true", help="Include .lnk and .url files")
     args = parser.parse_args()
     organize_desktop(dry_run=args.dry_run, move_shortcuts=args.move_shortcuts)
+    if getattr(sys, "frozen", False):
+        input("\nPress Enter to exit...")
