@@ -47,7 +47,7 @@ DOWNLOADS_PATH = Path.home() / "Downloads"
 # Fix for .exe: when frozen, executable name is Organize-Downloads.exe not .py
 SELF_NAME = Path(sys.executable).name if getattr(sys, "frozen", False) else Path(__file__).name
 
-def organize(dry_run: bool = False) -> None:
+def organize(dry_run: bool = False, move_shortcuts: bool = True) -> None:
     if not DOWNLOADS_PATH.exists():
         print(f"[Error] Downloads folder not found: {DOWNLOADS_PATH}")
         return
@@ -89,7 +89,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Organize Downloads by file type.")
     parser.add_argument("--dry-run", action="store_true", help="Preview only, no files moved")
     args = parser.parse_args()
-    organize(dry_run=args.dry_run)
-    # Keep window open when double-clicked as .exe
-    if getattr(sys, "frozen", False):
+    try:
+        organize(dry_run=args.dry_run)
+    except Exception as e:
+        print(f"[Error] {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Keep window open when double-clicked (both .py and .exe)
+    try:
         input("\nPress Enter to exit...")
+    except:
+        pass

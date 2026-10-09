@@ -79,7 +79,7 @@ IGNORE = [
 # Fix for .exe self-detection
 SELF_NAME = Path(sys.executable).name if getattr(sys, "frozen", False) else Path(__file__).name
 
-def organize_desktop(dry_run: bool = False, move_shortcuts: bool = False) -> None:
+def organize_desktop(dry_run: bool = False, move_shortcuts: bool = True) -> None:
     print(f"Desktop location: {DESKTOP_PATH}")
     if not DESKTOP_PATH.exists():
         print(f"[Error] Desktop not found: {DESKTOP_PATH}")
@@ -102,8 +102,6 @@ def organize_desktop(dry_run: bool = False, move_shortcuts: bool = False) -> Non
             if ext in exts:
                 target = folder
                 break
-        if not move_shortcuts and target == "10_Shortcuts":
-            continue
         dest_dir = ORGANIZED_ROOT / target
         dest_path = get_unique_path(dest_dir / item.name)
         if dry_run:
@@ -127,6 +125,14 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Preview only, no files moved")
     parser.add_argument("--move-shortcuts", action="store_true", help="Include .lnk and .url files")
     args = parser.parse_args()
-    organize_desktop(dry_run=args.dry_run, move_shortcuts=args.move_shortcuts)
-    if getattr(sys, "frozen", False):
+    try:
+        organize_desktop(dry_run=args.dry_run, move_shortcuts=args.move_shortcuts)
+    except Exception as e:
+        print(f"[Error] {e}")
+        import traceback
+        traceback.print_exc()
+    
+    try:
         input("\nPress Enter to exit...")
+    except:
+        pass
