@@ -82,90 +82,41 @@ SELF_NAMES = {
 CURRENT_SELF = Path(sys.executable).name if getattr(sys, "frozen", False) else Path(__file__).name
 IGNORE_DESKTOP = ["00_Desktop_Organized"] + list(SELF_NAMES)
 
-# --- Safety: protected paths ---
+# --- Safety: protected paths (fixed) ---
+# Prevent organizing dangerous locations, but allow normal subfolders like Downloads\project
 
-def get_protected_roots() -> list[Path]:
-    roots: list[Path] = []
+def _resolve(p) -> Path | None:
     try:
-        # Drive roots: C:\, D:\ etc
-        # HOME itself
-        roots.append(HOME.resolve())
-        # Windows dir
-        windir = os.environ.get("WINDIR", r"C:\Windows")
-        roots.append(Path(windir).resolve())
-        # Program Files
-        for env_var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]:
-            pf = os.environ.get(env_var)
-            if pf:
-                roots.append(Path(pf).resolve())
-        # System drive root
-        system_drive = os.environ.get("SystemDrive", "C:")
-        roots.append(Path(f"{system_drive}\\").resolve())
+        return Path(p).resolve()
     except (OSError, RuntimeError):
-        pass
-    # Deduplicate
-    seen = set()
-    uniq = []
-    for p in roots:
-        try:
-            rp = p.resolve()
-            if str(rp).lower() not in seen:
-                seen.add(str(rp).lower())
-                uniq.append(rp)
-        except (OSError, RuntimeError):
-            continue
-    return uniq
+        return None
 
-PROTECTED_ROOTS = get_protected_roots()
+# Blocked only as the exact folder; subfolders are fine (e.g., HOME itself, but not HOME\Downloads)
+# Also block C:\Users (HOME.parent) to prevent organizing all user profiles
+EXACT_BLOCKED = [p for p in (
+    _resolve(HOME),
+    _resolve(HOME.parent),
+    _resolve(os.environ.get("SystemDrive", "C:") + "\\"),
+) if p]
+
+# Blocked together with everything inside (system folders)
+TREE_BLOCKED = [p for p in (
+    _resolve(os.environ.get("WINDIR", r"C:\Windows")),
+    _resolve(os.environ.get("ProgramFiles", r"C:\Program Files")),
+    _resolve(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
+) if p]
 
 def is_protected_path(folder: Path) -> str | None:
-    """Return reason if folder is protected, else None."""
-    try:
-        resolved = folder.resolve()
-    except (OSError, RuntimeError):
+    resolved = _resolve(folder)
+    if resolved is None:
         return "Cannot resolve path"
-
-    # Block drive root: C:\, D:\, /
-    if resolved == Path(resolved.anchor).resolve() or str(resolved).lower() == resolved.anchor.lower().strip("\\").lower() + "\\":
-        # Check if anchor is root
-        if len(resolved.parts) <= 1 or resolved.parent == resolved:
-            return f"Drive root is protected: {resolved}"
-    # Direct check for anchor equality (Windows: C:\ -> anchor C:\)
-    try:
-        if resolved == Path(resolved.anchor) or (os.name == "nt" and str(resolved).lower() == f"{resolved.drive.lower()}\\"):
-            return f"Drive root is protected: {resolved}"
-    except (OSError, ValueError):
-        pass
-
-    # Check against protected roots
-    for protected in PROTECTED_ROOTS:
-        try:
-            # Exact match
-            if resolved == protected:
-                return f"Protected location: {protected}"
-            # Inside protected (e.g., C:\Windows\System32)
-            # Use is_relative_to for Python 3.9+ (we have 3.9, but use try)
-            try:
-                if resolved.is_relative_to(protected):
-                    return f"Inside protected location: {protected}"
-            except AttributeError:
-                # Python <3.9 fallback
-                try:
-                    resolved.relative_to(protected)
-                    return f"Inside protected location: {protected}"
-                except ValueError:
-                    pass
-        except (OSError, ValueError, RuntimeError):
-            continue
-
-    # Block HOME directly, but allow subfolders like Downloads, Desktop (they are handled separately)
-    # Actually HOME itself should be blocked to avoid organizing entire home
-    try:
-        if resolved == HOME.resolve():
-            return f"Home folder is protected, organize a subfolder instead: {HOME}"
-    except (OSError, RuntimeError):
-        pass
-
+    if resolved.parent == resolved:
+        return f"Drive root is protected: {resolved}"
+    if resolved in EXACT_BLOCKED:
+        return f"Protected location, organize a subfolder instead: {resolved}"
+    for root in TREE_BLOCKED:
+        if resolved == root or root in resolved.parents:
+            return f"Inside protected system location: {root}"
     return None
 
 def organize_folder(source: Path, dest_root: Path | None, dry_run: bool, move_shortcuts: bool = False, label: str = "") -> int:
@@ -252,7 +203,7 @@ def organize_custom_folder(folder: Path, dry_run: bool = False, move_shortcuts: 
 
     return organize_folder(folder, None, dry_run, move_shortcuts, f"Folder {folder.name}")
 
-def install_context_menu():
+def install_context_menu(move_shortcuts: bool = False):
     if os.name != "nt":
         print("Context menu only works on Windows")
         return
@@ -261,20 +212,24 @@ def install_context_menu():
         exe_path = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else Path(__file__).resolve()
         if exe_path.suffix == ".py":
             python_exe = Path(sys.executable).resolve()
-            command = f'"{python_exe}" "{exe_path}" "%V"'
+            base = f'"{python_exe}" "{exe_path}" "%V"'
         else:
-            command = f'"{exe_path}" "%V"'
+            base = f'"{exe_path}" "%V"'
+        
+        # Add flag if user wants shortcuts in right-click
+        command = base + (" --move-shortcuts" if move_shortcuts else "")
 
         for reg_path in [r"Directory\shell\FileOrganizer", r"Directory\Background\shell\FileOrganizer"]:
-            key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"Software\Classes\{reg_path}")
+            key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{reg_path}")
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Organize with File Organizer")
             winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, str(exe_path))
-            cmd_key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"Software\Classes\{reg_path}\command")
+            cmd_key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{reg_path}\command")
             winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, command)
             winreg.CloseKey(cmd_key)
             winreg.CloseKey(key)
 
         print(f"[OK] Context menu installed! Command: {command}")
+        print(f"Shortcuts included in right-click: {'YES' if move_shortcuts else 'NO (default safe)'}")
         print("Now right-click any folder -> Organize with File Organizer")
         print("\nNote: The button stores the current exe path.")
         print("Place the program in a permanent folder before installing.")
@@ -292,8 +247,8 @@ def uninstall_context_menu():
             r"Directory\shell\FileOrganizerWithShortcuts", r"Directory\Background\shell\FileOrganizerWithShortcuts"
         ]:
             try:
-                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, f"Software\Classes\{reg_path}\command")
-                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, f"Software\Classes\{reg_path}")
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{reg_path}\command")
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{reg_path}")
             except FileNotFoundError:
                 pass
         print("[OK] Context menu removed")
@@ -331,26 +286,35 @@ def interactive_menu():
     except (EOFError, OSError):
         choice = "0"
 
+    # Ask about shortcuts for organize options 1-7 and also for 8 (install right-click)
+    move_sc = False
+    if choice in ["1", "2", "3", "4", "5", "6", "7", "8"]:
+        try:
+            ans = input("Include shortcuts (.lnk/.url) -> 10_Shortcuts? [y/N]: ").strip().lower()
+            move_sc = ans == "y"
+        except (EOFError, OSError):
+            move_sc = False
+
     try:
         if choice == "1":
-            organize_downloads(dry_run=False, move_shortcuts=False)
+            organize_downloads(dry_run=False, move_shortcuts=move_sc)
         elif choice == "2":
-            organize_desktop(dry_run=False, move_shortcuts=False)
+            organize_desktop(dry_run=False, move_shortcuts=move_sc)
         elif choice == "3":
-            organize_downloads(dry_run=False, move_shortcuts=False)
-            organize_desktop(dry_run=False, move_shortcuts=False)
+            organize_downloads(dry_run=False, move_shortcuts=move_sc)
+            organize_desktop(dry_run=False, move_shortcuts=move_sc)
         elif choice == "4":
             path = input("Enter folder path: ").strip().strip('"')
-            organize_custom_folder(Path(path), dry_run=False, move_shortcuts=False)
+            organize_custom_folder(Path(path), dry_run=False, move_shortcuts=move_sc)
         elif choice == "5":
-            organize_downloads(dry_run=True, move_shortcuts=False)
+            organize_downloads(dry_run=True, move_shortcuts=move_sc)
         elif choice == "6":
-            organize_desktop(dry_run=True, move_shortcuts=False)
+            organize_desktop(dry_run=True, move_shortcuts=move_sc)
         elif choice == "7":
-            organize_downloads(dry_run=True, move_shortcuts=False)
-            organize_desktop(dry_run=True, move_shortcuts=False)
+            organize_downloads(dry_run=True, move_shortcuts=move_sc)
+            organize_desktop(dry_run=True, move_shortcuts=move_sc)
         elif choice == "8":
-            install_context_menu()
+            install_context_menu(move_shortcuts=move_sc)
         elif choice == "9":
             uninstall_context_menu()
         else:
@@ -376,7 +340,7 @@ def main():
 
     # Install/uninstall context menu
     if args.install_context_menu:
-        install_context_menu()
+        install_context_menu(move_shortcuts=args.move_shortcuts)
         pause()
         sys.exit(0)
     if args.uninstall_context_menu:
@@ -436,10 +400,7 @@ def main():
     try:
         dry = args.dry_run
         move_sc = args.move_shortcuts
-        if args.both:
-            organize_downloads(dry_run=dry, move_shortcuts=move_sc)
-            organize_desktop(dry_run=dry, move_shortcuts=move_sc)
-        elif args.downloads and args.desktop:
+        if args.both or (args.downloads and args.desktop):
             organize_downloads(dry_run=dry, move_shortcuts=move_sc)
             organize_desktop(dry_run=dry, move_shortcuts=move_sc)
         elif args.downloads:
