@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build File Organizer v3.3 EXE
 
 on:
   push:
@@ -14,40 +14,80 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
-      - name: Install PyInstaller
-        run: pip install pyinstaller
-        
-      - name: Build EXEs
+
+      - name: Install dependencies
         run: |
-          pyinstaller --onefile --name Organize-All Organize-All.py
-          pyinstaller --onefile --name Organize-Downloads Organize-Downloads.py
-          pyinstaller --onefile --name Organize-Desktop Organize-Desktop.py
-          dir dist
+          python -m pip install --upgrade pip
+          pip install PySide6 pyinstaller
+
+      - name: Check files
+        run: |
+          dir
+          if (Test-Path "icon.ico") { echo "icon.ico found" } else { echo "icon.ico NOT found - will build without icon" }
+          if (Test-Path "Organize-PySide6-v3.3.py") { echo "v3.3 found" }
+          if (Test-Path "Organize-PySide6.py") { echo "v3.2 found" }
+
+      - name: Build Modern EXE (v3.3)
+        shell: pwsh
+        run: |
+          # Pick the newest file available
+          $target = ""
+          if (Test-Path "Organize-PySide6-v3.3.py") { $target = "Organize-PySide6-v3.3.py" }
+          elseif (Test-Path "Organize-PySide6.py") { $target = "Organize-PySide6.py" }
+          else { Write-Error "No Organize file found!"; exit 1 }
           
-      - name: Create Release with EXEs
+          echo "Building $target"
+          
+          $iconArg = ""
+          if (Test-Path "icon.ico") { $iconArg = '--icon=icon.ico --add-data "icon.ico;."' }
+          
+          # Build windowed, onefile, with icon and data
+          $cmd = "pyinstaller --onefile --windowed --name FileOrganizer-Modern --clean --noconfirm $iconArg $target"
+          echo $cmd
+          Invoke-Expression $cmd
+          
+          dir dist
+          if (-not (Test-Path "dist/FileOrganizer-Modern.exe")) { Write-Error "Build failed - exe not found"; exit 1 }
+
+      - name: Create Release v3.0 / v3.3
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/Organize-All.exe
-            dist/Organize-Downloads.exe
-            dist/Organize-Desktop.exe
+            dist/FileOrganizer-Modern.exe
           generate_release_notes: true
+          body: |
+            ## File Organizer PRO v3.3 - Production Ready
+            ### Omar Khatab
+            
+            **Fixes:**
+            - WAL mode for SQLite (no more database is locked)
+            - Fixed path bug (orig.parent / name -> orig)
+            - Fixed HOME.parent blocking C:\Users
+            - Fixed Undo overwrite protection
+            - Settings merge instead of overwrite
+            - Watch sleep 0.8s -> 0.35s
+            - HTML escape in logs
+            - Removed heavy shadow effect
+            - Full CLI flags support
+            - Auto interval with userData
+            
+            **How to use:**
+            1. Download FileOrganizer-Modern.exe
+            2. Double click -> GUI
+            3. Right click folder -> Organize with File Organizer (after Install Right-Click)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifacts (manual run)
+      - name: Upload artifact (manual run)
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
-          name: windows-exe
-          path: |
-            dist/Organize-All.exe
-            dist/Organize-Downloads.exe
-            dist/Organize-Desktop.exe
+          name: FileOrganizer-Modern-v3.3
+          path: dist/FileOrganizer-Modern.exe
+          retention-days: 30
