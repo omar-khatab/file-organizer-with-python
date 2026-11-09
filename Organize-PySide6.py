@@ -9,10 +9,30 @@ Fixes v3.1 -> v3.2:
 6. closeEvent blocks batch_running
 7. Undo missing counter
 8. Packaging: get_resource_path for icon.ico via sys._MEIPASS
+
+v3.2.1 (bug-fix release):
+9.  Closing the window with nothing running now really exits (was a hidden zombie process); "No" on the tray prompt now quits
+10. Watch no longer writes an empty history row every minute (sessions are created on the first move)
+11. Skips desktop.ini / Thumbs.db / hidden+system files and the app's own exe
+12. Undo is blocked while Watch is running
+13. Downloads/Desktop resolved from Windows shell folders first (OneDrive / moved folders)
+14. Log text is HTML-escaped
+15. Install Right-Click is a toggle like Pro: the button reads "Remove Right-Click" once installed (and --uninstall-context-menu works from the command line)
+
+v3.2.4: History no longer shows the internal ID (it has a Type column instead: Watch / Auto / Manual); Watch and Auto can run together
+        (they take turns moving files, so they never fight over the same file)
+v3.2.3: tray icon now appears even without icon.ico (PySide6 6.x broke SP_ComputerIcon); with no tray the window is never hidden
+v3.2.2 (more bug fixes):
+16. Target combo follows the folder shown in the path box (it always fell back to Downloads)
+17. Browse / drag&drop no longer pop a second folder dialog; changing the folder stops a running Watch
+18. Stats timer no longer shows a modal "Blocked" dialog every 10s
+19. Right-click icon uses the exe itself (the _MEIPASS temp folder is deleted on exit)
+20. Log is capped; --auto 0 is clamped to 1 minute; settings are merged instead of overwritten
+21. Stale Watch sessions from a crash are closed at startup and empty Watch rows are cleaned up
 """
 
 from __future__ import annotations
-import sys, os, json, shutil, datetime, time, sqlite3
+import sys, os, json, shutil, datetime, time, sqlite3, html, threading
 from pathlib import Path
 from collections import defaultdict
 
@@ -21,7 +41,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QLabel, QLineEdit, QFileDialog, QTextEdit, QCheckBox,
         QComboBox, QGroupBox, QFrame, QProgressBar, QMessageBox, QGraphicsDropShadowEffect,
-        QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox, QSystemTrayIcon, QMenu
+        QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox, QSystemTrayIcon, QMenu, QStyle
     )
     from PySide6.QtCore import Qt, QThread, Signal, QTimer, QMutex
     from PySide6.QtGui import QColor, QAction, QIcon
@@ -56,22 +76,64 @@ if not has_cli and (len(sys.argv) == 1 or is_folder_arg):
     hide_black_console()
 
 HOME = Path.home()
-DOWNLOADS_PATH = HOME / "Downloads"
 SETTINGS_PATH = HOME / ".file_organizer" / "settings.json"
 
-def find_desktop() -> Path:
-    for p in [HOME / "Desktop", HOME / "OneDrive" / "Desktop"]:
-        if p.exists() and p.is_dir():
-            return p
+def _make_guid(folder_id: str):
+    """ctypes GUID with the exact memory layout Windows expects (same bytes as uuid.bytes_le)."""
+    import ctypes, uuid
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_uint32), ("Data2", ctypes.c_uint16), ("Data3", ctypes.c_uint16), ("Data4", ctypes.c_ubyte * 8)]  # fixed sizes: c_ulong is 8 bytes on Linux
+    u = uuid.UUID(folder_id)
+    return GUID(u.time_low, u.time_mid, u.time_hi_version, (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+
+def _known_folder_path(folder_id: str):
+    """SHGetKnownFolderPath: the one API that always knows about moved / OneDrive-redirected folders."""
+    if sys.platform != "win32":
+        return None
     try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders")
-        path = Path(winreg.QueryValueEx(key, "Desktop")[0])
-        if path.exists():
-            return path
+        import ctypes
+        from ctypes import wintypes
+        guid = _make_guid(folder_id)
+        fn = ctypes.windll.shell32.SHGetKnownFolderPath
+        fn.argtypes = [ctypes.POINTER(type(guid)), wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p)]
+        fn.restype = ctypes.c_long
+        ptr = ctypes.c_void_p()
+        if fn(ctypes.byref(guid), 0, None, ctypes.byref(ptr)) != 0:
+            return None
+        try:
+            return ctypes.wstring_at(ptr.value)
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(ptr)
     except Exception as e:
-        print(f"find_desktop fallback: {e}")
-    return HOME / "Desktop"
+        print(f"SHGetKnownFolderPath({folder_id}) failed: {e}")
+        return None
+
+def get_shell_folder(known_folder_id: str, reg_value: str, fallbacks: list) -> Path:
+    """Where Windows really keeps a user folder: shell API, then User Shell Folders, then Shell Folders, then defaults."""
+    candidates = [_known_folder_path(known_folder_id)]
+    if sys.platform == "win32":
+        try:
+            import winreg
+            for key_name in ("User Shell Folders", "Shell Folders"):
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"Software\Microsoft\Windows\CurrentVersion\Explorer\{key_name}") as key:
+                        candidates.append(os.path.expandvars(winreg.QueryValueEx(key, reg_value)[0]))  # REG_EXPAND_SZ has %VARS%
+                except OSError:
+                    continue
+        except ImportError:
+            pass
+    for candidate in candidates:
+        if candidate and Path(candidate).is_dir():
+            return Path(candidate)
+    for fb in fallbacks:
+        if fb.is_dir():
+            return fb
+    return fallbacks[0]
+
+DOWNLOADS_PATH = get_shell_folder("{374DE290-123F-4565-9164-39C4925E467B}", "{374DE290-123F-4565-9164-39C4925E467B}", [HOME / "Downloads"])
+
+def find_desktop() -> Path:
+    return get_shell_folder("{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", "Desktop", [HOME / "Desktop", HOME / "OneDrive" / "Desktop"])
 
 DESKTOP_PATH = find_desktop()
 ORGANIZED_ROOT = DESKTOP_PATH / "00_Desktop_Organized"
@@ -79,6 +141,61 @@ UNDO_ROOT = HOME / ".file_organizer" / "undo_logs"
 UNDO_ROOT.mkdir(parents=True, exist_ok=True)
 DB_PATH = HOME / ".file_organizer" / "history.db"
 SELF_NAMES = {"Organize-All.py", "Organize-PySide6.py", "Organize-GUI.py", "FileOrganizer-Modern.exe", "Organize-PySide6.pyw", "Organize-GUI.pyw"}
+MENU_BASES = [r"Directory\shell", r"Directory\Background\shell"]
+MENU_KEY_NAMES = ["FileOrganizer", "FileOrganizer.Watch", "FileOrganizer.Auto"]
+
+def is_menu_installed() -> bool:
+    try:
+        import winreg
+    except ImportError:
+        return False
+    for base in MENU_BASES:
+        for name in MENU_KEY_NAMES:
+            try:
+                winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{base}\{name}"))
+                return True
+            except OSError:
+                continue
+    return False
+
+def uninstall_context_menu():
+    """Remove every right-click entry this app created. Returns (removed_count, errors)."""
+    try:
+        import winreg
+    except ImportError:
+        return 0, ["Windows registry is not available on this system"]
+    removed, errors = 0, []
+    for base in MENU_BASES:
+        for name in MENU_KEY_NAMES:
+            path = rf"Software\Classes\{base}\{name}"
+            for sub_path in (path + r"\command", path):  # a key with sub-keys can't be deleted, so command goes first
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path)
+                    if sub_path == path:
+                        removed += 1
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    errors.append(f"{sub_path}: {e}")
+    return removed, errors
+
+FS_LOCK = threading.Lock()  # Watch and Organize/Auto take turns moving files, so they never fight over the same file
+_SELF_LOWER = {n.lower() for n in SELF_NAMES}
+if getattr(sys, "frozen", False):
+    _SELF_LOWER.add(Path(sys.executable).name.lower())  # the packaged exe, whatever it is called
+IGNORED_NAMES = {"desktop.ini", "thumbs.db"}
+
+def should_skip(item: Path) -> bool:
+    """Files the organizer must never touch: itself, shell metadata, hidden/system files."""
+    if item.name.lower() in _SELF_LOWER or item.name.lower() in IGNORED_NAMES:
+        return True
+    try:
+        attrs = getattr(item.stat(), "st_file_attributes", 0)
+        if attrs & 0x2 or attrs & 0x4:  # FILE_ATTRIBUTE_HIDDEN / SYSTEM
+            return True
+    except OSError:
+        pass
+    return False
 
 CATEGORIES = {
     "01_PDFs": [".pdf"],
@@ -183,6 +300,9 @@ def init_db():
             FOREIGN KEY(operation_id) REFERENCES operations(id)
         )
     """)
+    # Sessions left open by a crash/kill: drop empty ones (older versions wrote one every minute), close the rest so they can be undone
+    cur.execute("DELETE FROM operations WHERE status IN ('watch_open','done') AND file_count=0 AND error_count=0 AND label LIKE 'Watch %'")
+    cur.execute("UPDATE operations SET status='done' WHERE status='watch_open'")
     conn.commit()
     conn.close()
 
@@ -338,7 +458,7 @@ def organize_folder_core(source: Path, dest_root: Path | None, move_shortcuts: b
     except Exception as e:
         return 0, [], [{"name": source.name, "error": f"Cannot list dir: {e}"}]
     for item in items:
-        if item.name in SELF_NAMES or item.name.startswith("00_") or item.is_dir():
+        if should_skip(item) or item.name.startswith("00_") or item.is_dir():
             continue
         ext = item.suffix.lower()
         if ext in TEMP_EXTS:
@@ -374,7 +494,7 @@ def scan_folder_stats(folder: Path):
     details = []
     try:
         for item in folder.iterdir():
-            if item.is_file() and item.name not in SELF_NAMES and not item.name.startswith("00_"):
+            if item.is_file() and not should_skip(item) and not item.name.startswith("00_"):
                 if item.suffix.lower() in TEMP_EXTS:
                     continue
                 ext = item.suffix.lower()
@@ -403,12 +523,20 @@ class OrganizeWorker(QThread):
     finished_signal = Signal(int, dict, int, list)
     progress_signal = Signal(int)
 
-    def __init__(self, folders, move_shortcuts):
+    def __init__(self, folders, move_shortcuts, tag=""):
         super().__init__()
         self.folders = folders
         self.move_shortcuts = move_shortcuts
+        self.tag = tag  # "Auto" for scheduled runs; shown as the Type in History
+
+    def _label(self, base):
+        return f"{self.tag} {base}".strip()
 
     def run(self):
+        with FS_LOCK:  # if Watch is running it waits (a moment) instead of moving files at the same time
+            self._run_all()
+
+    def _run_all(self):
         total_moved = 0
         total_errors = 0
         all_counts = defaultdict(int)
@@ -416,11 +544,11 @@ class OrganizeWorker(QThread):
         for idx, folder in enumerate(self.folders):
             self.progress_signal.emit(int((idx / len(self.folders)) * 100))
             if folder == DOWNLOADS_PATH:
-                moved, moves, errors = organize_folder_core(folder, None, self.move_shortcuts, "Downloads")
+                moved, moves, errors = organize_folder_core(folder, None, self.move_shortcuts, self._label("Downloads"))
             elif folder == DESKTOP_PATH:
-                moved, moves, errors = organize_folder_core(folder, ORGANIZED_ROOT, self.move_shortcuts, "Desktop")
+                moved, moves, errors = organize_folder_core(folder, ORGANIZED_ROOT, self.move_shortcuts, self._label("Desktop"))
             else:
-                moved, moves, errors = organize_folder_core(folder, None, self.move_shortcuts, f"Folder {folder.name}")
+                moved, moves, errors = organize_folder_core(folder, None, self.move_shortcuts, self._label(f"Folder {folder.name}"))
             total_moved += moved
             total_errors += len(errors)
             for m in moves:
@@ -467,6 +595,13 @@ class WatchWorker(QThread):
     def stop(self):
         self._stop = True
 
+    def _ensure_session(self):
+        if not self.current_op_id:
+            self.current_op_id = create_watch_session(self.folder)
+            if self.current_op_id:
+                self.log_signal.emit(f"Watch session {self.current_op_id} started", "info")
+        return self.current_op_id
+
     def is_file_ready(self, file_path: Path):
         try:
             if not file_path.exists() or not file_path.is_file():
@@ -474,7 +609,7 @@ class WatchWorker(QThread):
             name_lower = file_path.name.lower()
             if any(name_lower.endswith(ext) for ext in TEMP_EXTS):
                 return False
-            if file_path.name in SELF_NAMES or file_path.name.startswith("00_"):
+            if should_skip(file_path) or file_path.name.startswith("00_"):
                 return False
             size1 = file_path.stat().st_size
             time.sleep(0.8)
@@ -494,12 +629,8 @@ class WatchWorker(QThread):
             return (p.name, -1, -1)
 
     def run(self):
-        # Create initial session with immediate DB write
-        self.current_op_id = create_watch_session(self.folder)
-        if self.current_op_id:
-            self.log_signal.emit(f"Watch session {self.current_op_id} started - immediate DB writes", "info")
-        else:
-            self.log_signal.emit("Watch session DB create failed, will retry", "error")
+        # Sessions are created on the first move/error, so Watch never writes empty history rows
+        self.current_op_id = None
 
         processed = {}
         failed_retries = {}
@@ -520,10 +651,8 @@ class WatchWorker(QThread):
                 if self.current_op_id:
                     close_watch_session(self.current_op_id)
                     self.log_signal.emit(f"Closed watch session {self.current_op_id}", "info")
-                self.current_op_id = create_watch_session(self.folder)
+                self.current_op_id = None  # the next session is created on the next move
                 self.last_flush = time.time()
-                if self.current_op_id:
-                    self.log_signal.emit(f"New watch session {self.current_op_id}", "info")
 
             try:
                 for item in self.folder.iterdir():
@@ -534,7 +663,7 @@ class WatchWorker(QThread):
                     sig = self.get_sig(item)
                     if item.name in processed and processed[item.name] == sig:
                         continue
-                    if item.name in SELF_NAMES or item.name.startswith("00_"):
+                    if should_skip(item) or item.name.startswith("00_"):
                         processed[item.name] = sig
                         continue
                     now = time.time()
@@ -565,14 +694,18 @@ class WatchWorker(QThread):
                             self.log_signal.emit(f"Cannot create {actual_root}: {e}", "error")
                             continue
                     dest_dir = actual_root / target
+                    if not FS_LOCK.acquire(timeout=1.0):
+                        continue  # Auto/Organize is moving files right now - this file is picked up again next round
                     try:
+                        if not item.exists():  # Auto/Organize already moved it
+                            continue
                         dest_dir.mkdir(exist_ok=True)
                         dest_path = get_unique_path(dest_dir / item.name)
                         orig = item.resolve()
                         shutil.move(str(item), str(dest_path))
                         self.log_signal.emit(f"Moved: {item.name} -> {target} (DB immediate)", "success")
                         move_dict = {"from": str(orig.parent / item.name), "to": str(dest_path.resolve()), "name": item.name, "category": target}
-                        if self.current_op_id:
+                        if self._ensure_session():
                             add_move_to_session(self.current_op_id, move_dict)
                         processed[item.name] = sig
                         if item.name in failed_retries:
@@ -582,13 +715,15 @@ class WatchWorker(QThread):
                     except Exception as e:
                         err = f"{type(e).__name__}: {e}"
                         self.log_signal.emit(f"Failed {item.name}: {err}", "error")
-                        if self.current_op_id:
+                        if self._ensure_session():
                             add_error_to_session(self.current_op_id, {"name": item.name, "error": err})
                         retries = failed_retries.get(item.name, 0) + 1
                         failed_retries[item.name] = retries
                         if retries >= 5:
                             self.log_signal.emit(f"Giving up on {item.name} after 5 retries", "error")
                             processed[item.name] = sig
+                    finally:
+                        FS_LOCK.release()
             except Exception as e:
                 self.log_signal.emit(f"Scan error: {e}", "error")
                 time.sleep(2)
@@ -627,7 +762,7 @@ class HistoryDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            self.tr("ID", "الرقم"), self.tr("Date", "التاريخ"), self.tr("Folder", "المجلد"),
+            self.tr("Date", "التاريخ"), self.tr("Type", "النوع"), self.tr("Folder", "المجلد"),
             self.tr("Files", "الملفات"), self.tr("Status", "الحالة"), self.tr("Errors", "أخطاء"), self.tr("Source", "المسار")
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -657,7 +792,7 @@ class HistoryDialog(QDialog):
         try:
             conn = sqlite3.connect(str(DB_PATH))
             cur = conn.cursor()
-            cur.execute("SELECT id, readable_date, folder_name, file_count, status, error_count, source_path FROM operations WHERE status!='watch_open' ORDER BY id DESC LIMIT 100")
+            cur.execute("SELECT id, readable_date, folder_name, file_count, status, error_count, source_path, label FROM operations WHERE status!='watch_open' AND (file_count>0 OR error_count>0) ORDER BY id DESC LIMIT 100")
             rows = cur.fetchall()
             conn.close()
         except Exception as e:
@@ -665,12 +800,27 @@ class HistoryDialog(QDialog):
             rows = []
         self.table.setRowCount(len(rows))
         for i, r in enumerate(rows):
-            for j, val in enumerate(r):
-                item = QTableWidgetItem(str(val))
-                self.table.setItem(i, j, item)
+            label = str(r[7] or "")
+            if label.startswith("Watch"):
+                kind = self.tr("Watch", "مراقبة")
+            elif label.startswith("Auto"):
+                kind = self.tr("Auto", "تلقائي")
+            else:
+                kind = self.tr("Manual", "يدوي")
+            shown = [r[1], kind, r[2], r[3], r[4], r[5], r[6]]  # the internal ID stays in self.rows only, it is never displayed
+            for j, val in enumerate(shown):
+                self.table.setItem(i, j, QTableWidgetItem(str(val)))
         self.rows = rows
 
+    def _row_text(self, row):
+        r = self.rows[row]
+        return f"{r[1]} | {r[2]} | {r[3]} files"
+
     def undo_selected(self):
+        owner = self.parent()
+        if owner is not None and getattr(owner, "watch_running", False):
+            QMessageBox.warning(self, self.tr("Watch running", "المراقبة شغالة"), self.tr("Stop Watch before undoing an operation", "أوقف المراقبة قبل الاسترجاع"))
+            return
         selected = self.table.selectedItems()
         if not selected:
             QMessageBox.warning(self, self.tr("No selection", "لم تحدد"), self.tr("Select an operation first", "اختر عملية أولا"))
@@ -681,7 +831,7 @@ class HistoryDialog(QDialog):
         if status != "done":
             QMessageBox.warning(self, self.tr("Already undone", "تم استرجاعه"), self.tr("This operation is already undone", "تم استرجاعها مسبقا"))
             return
-        reply = QMessageBox.question(self, self.tr("Confirm Undo", "تأكيد"), self.tr(f"Undo operation {op_id}?", f"استرجاع {op_id}؟"), QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(self, self.tr("Confirm Undo", "تأكيد"), self.tr(f"Undo this operation?\n{self._row_text(row)}", f"استرجاع هذه العملية؟\n{self._row_text(row)}"), QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
         restored, failed, missing, total, err = undo_operation(op_id)
@@ -708,7 +858,7 @@ class HistoryDialog(QDialog):
         except Exception as e:
             print(f"show_details db failed: {e}")
             moves, errors = [], []
-        details = f"Operation {op_id} - {len(moves)} files, {len(errors)} errors\n\n"
+        details = f"{self._row_text(row)} - {len(moves)} files, {len(errors)} errors\n\n"
         for name, cat, to_path in moves[:100]:
             details += f"{name} -> {cat}\n"
         if errors:
@@ -716,7 +866,7 @@ class HistoryDialog(QDialog):
             for fname, err in errors:
                 details += f"{fname}: {err}\n"
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Details - ID {op_id}")
+        dlg.setWindowTitle(f"Details - {self.rows[row][1]}")
         dlg.resize(650, 450)
         lay = QVBoxLayout(dlg)
         txt = QTextEdit()
@@ -784,7 +934,7 @@ class MainWindow(QMainWindow):
                 "total": "Total Files", "pdfs": "PDFs", "images": "Images",
                 "preview": "Preview", "organize": "Organize Now", "watch": "Watch Live",
                 "stop_watch": "Stop Watch", "auto": "Auto", "stop_auto": "Stop Auto",
-                "install": "Install Right-Click", "undo": "Undo Latest", "history": "History",
+                "install": "Install Right-Click", "uninstall": "Remove Right-Click", "undo": "Undo Latest", "history": "History",
                 "browse": "Browse", "include_short": "Include shortcuts", "live_log": "Live Log",
                 "clear": "Clear", "stop": "Stop", "busy": "Busy", "confirm": "Confirm",
                 "done": "Done", "error": "Error", "no_folder": "Select valid folder",
@@ -802,7 +952,7 @@ class MainWindow(QMainWindow):
                 "total": "إجمالي الملفات", "pdfs": "PDF", "images": "الصور",
                 "preview": "معاينة", "organize": "نظم الآن", "watch": "مراقبة مباشرة",
                 "stop_watch": "إيقاف المراقبة", "auto": "تلقائي", "stop_auto": "إيقاف التلقائي",
-                "install": "تثبيت كليك يمين", "undo": "استرجاع الأخير", "history": "السجل",
+                "install": "تثبيت كليك يمين", "uninstall": "إزالة كليك يمين", "undo": "استرجاع الأخير", "history": "السجل",
                 "browse": "تصفح", "include_short": "تضمين الاختصارات", "live_log": "السجل المباشر",
                 "clear": "مسح", "stop": "إيقاف", "busy": "مشغول", "confirm": "تأكيد",
                 "done": "تم", "error": "خطأ", "no_folder": "اختر مجلد صحيح",
@@ -930,6 +1080,7 @@ class MainWindow(QMainWindow):
         log_layout = QVBoxLayout(self.log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.document().setMaximumBlockCount(3000)  # a long-running Watch must not grow the log forever
         self.log_text.setPlaceholderText("Logs... Drag & drop any folder!")
         log_layout.addWidget(self.log_text)
         log_btns = QHBoxLayout()
@@ -961,6 +1112,7 @@ class MainWindow(QMainWindow):
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("Drag & drop folder here...")
         self.path_edit.setText(str(self.current_folder))
+        self.sync_target_combo()
         target_layout.addWidget(self.path_edit)
         bottom_target = QHBoxLayout()
         self.shortcut_check = QCheckBox(self.tr_txt("include_short"))
@@ -1013,19 +1165,22 @@ class MainWindow(QMainWindow):
         left_panel.addWidget(self.action_group)
 
         self.quick_group = QGroupBox(self.tr_txt("system"))
-        quick_layout = QHBoxLayout(self.quick_group)
+        quick_layout = QVBoxLayout(self.quick_group)
         self.install_btn = QPushButton(self.tr_txt("install"))
         self.install_btn.setObjectName("secondary")
-        self.install_btn.clicked.connect(self.install_menu)
+        self.install_btn.clicked.connect(self.toggle_menu)
+        self.refresh_menu_btn()
         self.undo_btn = QPushButton(self.tr_txt("undo"))
         self.undo_btn.setObjectName("secondary")
         self.undo_btn.clicked.connect(self.do_undo_quick)
         self.history_btn = QPushButton(self.tr_txt("history"))
         self.history_btn.setObjectName("secondary")
         self.history_btn.clicked.connect(self.show_history)
-        quick_layout.addWidget(self.install_btn)
-        quick_layout.addWidget(self.undo_btn)
-        quick_layout.addWidget(self.history_btn)
+        quick_row = QHBoxLayout()
+        quick_row.addWidget(self.install_btn)
+        quick_row.addWidget(self.undo_btn)
+        quick_row.addWidget(self.history_btn)
+        quick_layout.addLayout(quick_row)
         left_panel.addWidget(self.quick_group)
         left_panel.addStretch()
 
@@ -1045,12 +1200,18 @@ class MainWindow(QMainWindow):
 
     def setup_tray(self):
         try:
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                print("setup_tray: system tray not available")
+                self.tray = None
+                return
             self.tray = QSystemTrayIcon(self)
+            icon = QIcon()
             icon_file = get_resource_path("icon.ico")
             if icon_file.exists():
-                self.tray.setIcon(QIcon(str(icon_file)))
-            else:
-                self.tray.setIcon(self.style().standardIcon(self.style().SP_ComputerIcon))
+                icon = QIcon(str(icon_file))
+            if icon.isNull():  # no icon.ico next to the app (or it failed to load): use a built-in icon so the tray still shows
+                icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+            self.tray.setIcon(icon)
             menu = QMenu()
             show_action = QAction("Show / إظهار", self)
             show_action.triggered.connect(self.show_from_tray)
@@ -1079,7 +1240,7 @@ class MainWindow(QMainWindow):
             print(f"quit_app stop failed: {e}")
         # Save settings
         try:
-            save_settings({
+            save_settings({**load_settings(),
                 "last_folder": str(self.current_folder),
                 "auto_interval": int(self.auto_interval.currentText().split()[0]),
                 "lang": self.lang,
@@ -1107,6 +1268,14 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         # If watch or auto running, hide to tray
+        if (self.watch_running or self.auto_running) and not self.tray:
+            # Without a tray icon, hiding the window would leave Watch running with no way to reach it
+            msg = ("لا توجد أيقونة tray - الإغلاق سيوقف المراقبة/التلقائي. إغلاق؟" if self.lang == "ar"
+                   else "No tray icon is available - closing will stop Watch/Auto. Quit?")
+            event.ignore()
+            if QMessageBox.question(self, self.tr_txt("confirm"), msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+                self.quit_app()
+            return
         if self.watch_running or self.auto_running:
             reply = QMessageBox.question(self, self.tr_txt("confirm"), self.tr_txt("quit_confirm"), QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
@@ -1124,10 +1293,11 @@ class MainWindow(QMainWindow):
                 update_setting("last_folder", str(self.current_folder))
             else:
                 event.ignore()
+                self.quit_app()  # "No" = really quit (stops Watch, then exits)
         else:
             # Save settings
             try:
-                save_settings({
+                save_settings({**load_settings(),
                     "last_folder": str(self.current_folder),
                     "auto_interval": int(self.auto_interval.currentText().split()[0]),
                     "lang": self.lang,
@@ -1142,6 +1312,7 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print(f"tray hide failed: {e}")
             event.accept()
+            QTimer.singleShot(0, QApplication.quit)  # quit-on-last-window-closed is off (tray), so exit explicitly
 
     def is_startup_enabled(self) -> bool:
         if sys.platform != "win32":
@@ -1228,7 +1399,7 @@ class MainWindow(QMainWindow):
         refresh_button_style(self.watch_btn)
         self.auto_btn.setText(self.tr_txt("stop_auto") if self.auto_running else self.tr_txt("auto"))
         refresh_button_style(self.auto_btn)
-        self.install_btn.setText(self.tr_txt("install"))
+        self.refresh_menu_btn()
         self.undo_btn.setText(self.tr_txt("undo"))
         self.history_btn.setText(self.tr_txt("history"))
         self.auto_status.setText(self.tr_txt("auto_running", m=self.auto_interval.currentText().split()[0]) if self.auto_running else self.tr_txt("auto_stopped"))
@@ -1252,14 +1423,38 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, self.tr_txt("blocked"), reason)
                     self.log(f"Blocked drop: {reason}", "error")
                     return
-                self.path_edit.setText(str(path))
-                self.target_combo.setCurrentText("Custom...")
-                self.current_folder = path
-                update_setting("last_folder", str(path))
+                self.set_custom_folder(path)
                 self.log(f"Dropped: {path.name}", "info")
-                self.update_stats()
+
+    def sync_target_combo(self):
+        """Make the combo match current_folder (otherwise 'Downloads' wins over the folder the path box shows)."""
+        if self.current_folder == DOWNLOADS_PATH:
+            text = "Downloads"
+        elif self.current_folder == DESKTOP_PATH:
+            text = "Desktop"
+        else:
+            text = "Custom..."
+        self.target_combo.blockSignals(True)
+        self.target_combo.setCurrentText(text)
+        self.target_combo.blockSignals(False)
+
+    def set_custom_folder(self, path: Path):
+        """Select a custom folder without re-triggering the Browse dialog via currentTextChanged."""
+        if self.watch_running:
+            self.log(f"Folder changed to {path.name} - stopping Watch", "warning")
+            self.toggle_watch()
+        self.current_folder = path
+        self.path_edit.setText(str(path))
+        self.target_combo.blockSignals(True)
+        self.target_combo.setCurrentText("Custom...")
+        self.target_combo.blockSignals(False)
+        update_setting("last_folder", str(path))
+        self.update_stats()
 
     def on_target_changed(self, text):
+        if self.watch_running and text in ("Downloads", "Desktop", "Both"):
+            self.log("Target changed - stopping Watch", "warning")
+            self.toggle_watch()
         if text == "Downloads":
             self.current_folder = DOWNLOADS_PATH
             self.path_edit.setText(str(DOWNLOADS_PATH))
@@ -1278,13 +1473,9 @@ class MainWindow(QMainWindow):
             if reason:
                 QMessageBox.warning(self, self.tr_txt("blocked"), reason)
                 return
-            self.path_edit.setText(folder)
-            self.current_folder = Path(folder)
-            self.target_combo.setCurrentText("Custom...")
-            update_setting("last_folder", folder)
-            self.update_stats()
+            self.set_custom_folder(Path(folder))
 
-    def get_folders(self):
+    def get_folders(self, silent=False):
         text = self.target_combo.currentText()
         folders = []
         if text == "Downloads":
@@ -1301,8 +1492,9 @@ class MainWindow(QMainWindow):
         for f in folders:
             reason = is_protected_path(f.resolve())
             if reason:
-                QMessageBox.warning(self, self.tr_txt("blocked"), reason)
-                self.log(f"Blocked: {reason}", "error")
+                if not silent:  # the stats timer calls this every 10s - never pop a dialog from it
+                    QMessageBox.warning(self, self.tr_txt("blocked"), reason)
+                    self.log(f"Blocked: {reason}", "error")
             else:
                 safe_folders.append(f)
         return safe_folders
@@ -1314,10 +1506,10 @@ class MainWindow(QMainWindow):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         color_map = {"error": "#ef4444", "warning": "#f59e0b", "success": "#10b981", "info": "#e0e0e0"}
         color = color_map.get(level, "#e0e0e0")
-        self.log_text.append(f'<span style="color: #888888;">[{timestamp}]</span> <span style="color: {color};">{msg}</span>')
+        self.log_text.append(f'<span style="color: #888888;">[{timestamp}]</span> <span style="color: {color};">{html.escape(str(msg))}</span>')
 
     def update_stats(self):
-        folders = self.get_folders()
+        folders = self.get_folders(silent=True)
         if not folders:
             return
         folder = folders[0]
@@ -1448,6 +1640,7 @@ class MainWindow(QMainWindow):
         self.organize_btn.setEnabled(not self.batch_running)
 
     def start_auto_with_interval(self, interval_min):
+        interval_min = max(1, int(interval_min))  # --auto 0 would make the timer fire non-stop
         folders = self.get_folders()
         if not folders:
             return
@@ -1495,12 +1688,12 @@ class MainWindow(QMainWindow):
             self.start_auto_with_interval(interval_min)
 
     def do_auto_run(self):
-        if self.batch_running or self.watch_running:
-            self.log("Auto skipped - busy", "warning")
+        if self.batch_running:  # Watch may be running: the two take turns (FS_LOCK), so Auto still runs
+            self.log("Auto skipped - another organize is still running", "warning")
             return
         self.log(f"Auto run - {datetime.datetime.now().strftime('%H:%M:%S')}", "info")
         self.set_batch_busy(True)
-        self.auto_worker = OrganizeWorker(self.auto_folders, self.shortcut_check.isChecked())
+        self.auto_worker = OrganizeWorker(self.auto_folders, self.shortcut_check.isChecked(), tag="Auto")
         self.auto_worker.log_signal.connect(self.log)
         self.auto_worker.finished_signal.connect(self.on_auto_finished)
         self.auto_worker.start()
@@ -1545,7 +1738,8 @@ class MainWindow(QMainWindow):
             import winreg
             exe_path = Path(sys.executable).resolve() if getattr(sys, 'frozen', False) else Path(__file__).resolve()
             icon_path_obj = get_resource_path("icon.ico")
-            icon_path = str(icon_path_obj) if icon_path_obj.exists() else str(exe_path)
+            # _MEIPASS is a temp folder that is deleted on exit, so a packaged app must point at its own exe
+            icon_path = str(exe_path) if getattr(sys, "frozen", False) else (str(icon_path_obj) if icon_path_obj.exists() else str(exe_path))
             items = {
                 "FileOrganizer": ("Organize with File Organizer", ""),
                 "FileOrganizer.Watch": ("Watch this folder (Live)", "--watch"),
@@ -1571,7 +1765,30 @@ class MainWindow(QMainWindow):
             self.log(f"Failed: {e}", "error")
             QMessageBox.warning(self, self.tr_txt("error"), str(e))
 
+    def refresh_menu_btn(self):
+        self.install_btn.setText(self.tr_txt("uninstall" if is_menu_installed() else "install"))
+
+    def toggle_menu(self):
+        if is_menu_installed():
+            self.uninstall_menu()
+        else:
+            self.install_menu()
+        self.refresh_menu_btn()
+
+    def uninstall_menu(self):
+        removed, errors = uninstall_context_menu()
+        for e in errors:
+            self.log(f"Failed: {e}", "error")
+        if errors:
+            QMessageBox.warning(self, self.tr_txt("error"), "\n".join(errors))
+        else:
+            self.log(f"Right-click menu removed ({removed} entries)", "success")
+            QMessageBox.information(self, self.tr_txt("done"), "Right-click menu removed.")
+
     def do_undo_quick(self):
+        if self.watch_running:
+            QMessageBox.warning(self, self.tr_txt("busy"), "Stop Watch before undoing an operation")
+            return
         try:
             conn = sqlite3.connect(str(DB_PATH))
             cur = conn.cursor()
@@ -1642,6 +1859,10 @@ def parse_args():
     return args
 
 def main():
+    if "--uninstall-context-menu" in sys.argv:
+        removed, errors = uninstall_context_menu()
+        print(f"Removed {removed} right-click entries" + (f" | errors: {errors}" if errors else ""))
+        return
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     # Fix #3: prevent quit when window hidden
@@ -1690,14 +1911,13 @@ def main():
         initial_folder = DOWNLOADS_PATH if DOWNLOADS_PATH.exists() else None
 
     window = MainWindow(initial_folder=initial_folder, start_watch=start_watch, start_auto=start_auto, start_background=start_background)
-    if start_background:
-        # Start hidden in tray
+    if start_background and window.tray:
+        # Start hidden in tray (only when there is a tray icon to bring the window back from)
         window.hide()
-        if window.tray:
-            try:
-                window.tray.showMessage("File Organizer", "Running in background - tray", QSystemTrayIcon.Information, 3000)
-            except Exception as e:
-                print(f"tray message failed: {e}")
+        try:
+            window.tray.showMessage("File Organizer", "Running in background - tray", QSystemTrayIcon.Information, 3000)
+        except Exception as e:
+            print(f"tray message failed: {e}")
     else:
         window.show()
     if initial_folder:

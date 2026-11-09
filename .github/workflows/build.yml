@@ -1,4 +1,4 @@
-name: Build File Organizer v3.3 EXE
+name: Build File Organizer v3.2 EXE
 
 on:
   push:
@@ -29,18 +29,12 @@ jobs:
         run: |
           dir
           if (Test-Path "icon.ico") { echo "icon.ico found" } else { echo "icon.ico NOT found - will build without icon" }
-          if (Test-Path "Organize-PySide6-v3.3.py") { echo "v3.3 found" }
-          if (Test-Path "Organize-PySide6.py") { echo "v3.2 found" }
+          if (Test-Path "Organize-PySide6.py") { echo "v3.2 found - Organize-PySide6.py" } else { Write-Error "Organize-PySide6.py not found!"; exit 1 }
 
-      - name: Build Modern EXE (v3.3)
+      - name: Build Modern EXE (v3.2)
         shell: pwsh
         run: |
-          # Pick the newest file available
-          $target = ""
-          if (Test-Path "Organize-PySide6-v3.3.py") { $target = "Organize-PySide6-v3.3.py" }
-          elseif (Test-Path "Organize-PySide6.py") { $target = "Organize-PySide6.py" }
-          else { Write-Error "No Organize file found!"; exit 1 }
-          
+          $target = "Organize-PySide6.py"
           echo "Building $target"
           
           $iconArg = ""
@@ -54,7 +48,7 @@ jobs:
           dir dist
           if (-not (Test-Path "dist/FileOrganizer-Modern.exe")) { Write-Error "Build failed - exe not found"; exit 1 }
 
-      - name: Create Release v3.0 / v3.3
+      - name: Create Release v3.2
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
@@ -62,20 +56,21 @@ jobs:
             dist/FileOrganizer-Modern.exe
           generate_release_notes: true
           body: |
-            ## File Organizer PRO v3.3 - Production Ready
+            ## File Organizer PRO v3.2 - Production Ready
             ### Omar Khatab
             
-            **Fixes:**
-            - WAL mode for SQLite (no more database is locked)
-            - Fixed path bug (orig.parent / name -> orig)
-            - Fixed HOME.parent blocking C:\Users
-            - Fixed Undo overwrite protection
-            - Settings merge instead of overwrite
-            - Watch sleep 0.8s -> 0.35s
-            - HTML escape in logs
-            - Removed heavy shadow effect
-            - Full CLI flags support
-            - Auto interval with userData
+            **Current Stable - v3.2 (PySide6 GUI)**
+            
+            **Features:**
+            - Dark GUI + Drag & Drop
+            - Live Watch + Auto Organize (work together)
+            - History (SQLite) + Undo
+            - Dry-run Preview
+            - System Tray + Start with Windows
+            - Right-Click Integration
+            - Safe: no overwrite, skips protected / hidden files
+            - Works with OneDrive / moved folders
+            - Arabic / English
             
             **How to use:**
             1. Download FileOrganizer-Modern.exe
@@ -88,6 +83,6 @@ jobs:
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
-          name: FileOrganizer-Modern-v3.3
+          name: FileOrganizer-Modern-v3.2
           path: dist/FileOrganizer-Modern.exe
           retention-days: 30
