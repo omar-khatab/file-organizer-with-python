@@ -2,13 +2,13 @@
 
 > Windows-focused file automation that organizes Desktop, Downloads, and any folder into 11 clean categories. Built to clean up my own cluttered Downloads folder — and I still use it daily.
 
-**Current Version: v3.2 - PySide6 GUI ✅**
+**Current Version: v3.2 - PySide6 GUI**
 
 One file, zero setup. Download and double-click.
 
 ---
 
-## 🚀 Quick Start - النسخة الحالية v3.2
+## 🚀 Quick Start - v3.2
 
 ### Option 1: Python (GUI)
 
@@ -17,7 +17,7 @@ pip install PySide6
 python Organize-PySide6.py
 ```
 
-### CLI (نفس الملف)
+### CLI (same file)
 
 ```bash
 python Organize-PySide6.py --watch
@@ -31,16 +31,16 @@ python Organize-PySide6.py --both
 
 ## ✨ Features - v3.2
 
-- **Dark GUI + Drag & Drop** - اسحب أي فولدر ونظمه
-- **Live Watch** - بينظم الملفات الجديدة لوحده
-- **Auto Organize** - كل X دقيقة، وشغال مع Watch مع بعض
-- **History + Undo** - كل عملية متسجلة في SQLite وتقدر ترجعها
-- **Dry-run Preview** - شوف هيعمل إيه قبل ما ينقل
+- **Dark GUI + Drag & Drop** - Drop any folder to organize it
+- **Live Watch** - Organizes new files automatically
+- **Auto Organize** - Every X minutes, works together with Watch
+- **History + Undo** - Every operation is logged in SQLite and can be undone
+- **Dry-run Preview** - See what will happen before moving anything
 - **System Tray + Start with Windows**
-- **Right-Click** - كليك يمين على أي فولدر → Organize
-- **Safe** - مفيش overwrite، بيتخطى الملفات المحمية والمخفية
-- **Smart Paths** - شغال صح مع OneDrive والفولدرات المنقولة
-- **عربي / إنجليزي**
+- **Right-Click Integration** - Right-click any folder -> Organize
+- **Safe** - No overwrite, skips protected and hidden files
+- **Smart Paths** - Works correctly with OneDrive and moved folders
+- **English / Arabic**
 
 ### 📂 11 Categories - 60+ extensions
 
@@ -60,28 +60,28 @@ python Organize-PySide6.py --both
 
 ### 🛡️ Safe by design
 
-- `get_unique_path()` → `file.txt` → `file (1).txt` - مفيش overwrite
+- `get_unique_path()` -> `file.txt` -> `file (1).txt` - No overwrite
 - Skips itself, skips already-organized folders (`00_*`, `01_*`...)
 - Protected paths blocked: `C:\`, Home, `Windows`, `Program Files`
-- Skips `desktop.ini`, `Thumbs.db`, hidden+system files
+- Skips `desktop.ini`, `Thumbs.db`, hidden + system files
 
 ---
 
-## 🛤️ My Journey - الرحلة
+## 🛤️ My Journey
 
-البرنامج ده اتبنى على مراحل، وكل مرحلة محفوظة في `legacy/`:
+This project was built in stages. Every stage is preserved in `legacy/`:
 
-### v1 - البداية
-- `legacy/v1-downloads/Organize-Downloads.py` - بينظم Downloads بس
-- `legacy/v1-desktop/Organize-Desktop.py` - بينظم Desktop بس
+### v1 - The Beginning
+- `legacy/v1-downloads/Organize-Downloads.py` - Organizes Downloads only
+- `legacy/v1-desktop/Organize-Desktop.py` - Organizes Desktop only
 
-### v2 - التطور
-- `legacy/v2-all/Organize-All.py` - قايمة تفاعلية، بتختار الفولدر، Preview، Right-Click لأول مرة
+### v2 - Evolution
+- `legacy/v2-all/Organize-All.py` - Interactive menu, choose the folder, Preview, Right-Click for the first time
 
-### v3.2 - الحالية ✅
-- `Organize-PySide6.py` - GUI كامل، Watch، Auto، History، Undo
+### v3.2 - Current
+- `Organize-PySide6.py` - Full GUI, Watch, Auto, History, Undo
 
-شوف `CHANGELOG.md` للتفاصيل الكاملة.
+See `CHANGELOG.md` for full details.
 
 ---
 
@@ -89,7 +89,7 @@ python Organize-PySide6.py --both
 
 ```
 file-organizer-with-python/
-├── Organize-PySide6.py      # ⭐ v3.2 - Current - GUI
+├── Organize-PySide6.py      # v3.2 - Current - GUI
 ├── README.md
 ├── CHANGELOG.md
 ├── LICENSE
@@ -105,11 +105,11 @@ file-organizer-with-python/
 ---
 
 ## 📄 License
-MIT License — see LICENSE
+MIT License - see LICENSE
 Copyright (c) 2026 Omar Khatab
 
 ## 👨‍💻 Author
 **Omar Khatab**
 - GitHub: @omar-khatab
 
-Built for myself, shared for everyone. If it saved you 5 minutes, give it a ⭐!
+Built for myself, shared for everyone. If it saved you 5 minutes, give it a star!
