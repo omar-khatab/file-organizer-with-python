@@ -1,5 +1,7 @@
 """
-File Organizer v3.2 PRODUCTION - Fully Fixed + Settings + Safe Watch - Omar Khatab
+File Organizer FREE v3.2 - Omar Khatab
+# FREE Edition: 12 categories incl. Audio, Watch + Auto, History + Undo
+# PRO Edition adds: Editable Categories, Single Instance, Quiet Right-Click + Priority Support
 Fixes v3.1 -> v3.2:
 1. Watch batch in memory -> immediate DB insert under open session, flush every 60s, Quit stops worker then quits
 2. Start with Windows: --background flag + QSettings/JSON persistence, restores Watch/Auto
@@ -207,9 +209,10 @@ CATEGORIES = {
     "07_Programs": [".exe", ".msi", ".dmg", ".apk"],
     "08_Videos": [".mp4", ".mkv", ".mov", ".avi", ".wmv"],
     "09_Code": [".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".cpp", ".c", ".h", ".hpp", ".cs", ".go", ".rb", ".php", ".html", ".css", ".scss", ".json", ".xml", ".yml", ".yaml", ".sql", ".sh", ".bat", ".ps1", ".ipynb", ".dart", ".kt", ".swift", ".rs"],
-    "10_Shortcuts": [".lnk", ".url"],
+    "10_Audio": [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".aiff"],
+    "11_Shortcuts": [".lnk", ".url"],
 }
-UNKNOWN_FOLDER = "11_Others"
+UNKNOWN_FOLDER = "12_Others"
 TEMP_EXTS = {".tmp", ".crdownload", ".part", ".partial", ".download", ".!ut"}
 
 def _resolve(p) -> Path | None:
@@ -921,7 +924,7 @@ def refresh_button_style(btn):
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None, start_watch: bool = False, start_auto: int | None = None, start_background: bool = False):
         super().__init__()
-        self.setWindowTitle("File Organizer PRO v3.2 - Production Ready")
+        self.setWindowTitle("File Organizer FREE v3.2 - Free Edition")
         self.setGeometry(100, 100, 1150, 780)
         self.start_background = start_background
         # Load settings first
@@ -929,7 +932,7 @@ class MainWindow(QMainWindow):
         self.lang = self.settings.get("lang", "en")
         self.translations = {
             "en": {
-                "title": "File Organizer", "subtitle": "PRO v3.2 - Safe Watch + Settings + Tray Fixed",
+                "title": "File Organizer", "subtitle": "FREE v3.2 - Watch + Auto + History",
                 "target": "Target Folder", "actions": "Actions", "system": "System",
                 "total": "Total Files", "pdfs": "PDFs", "images": "Images",
                 "preview": "Preview", "organize": "Organize Now", "watch": "Watch Live",
@@ -947,7 +950,7 @@ class MainWindow(QMainWindow):
                 "quit_confirm": "Watch/Auto running - minimize to tray instead?"
             },
             "ar": {
-                "title": "منظم الملفات", "subtitle": "PRO v3.2 - آمن + إعدادات + تراي مصلح",
+                "title": "منظم الملفات", "subtitle": "FREE v3.2 - مجاني - مراقبة + تنظيم تلقائي",
                 "target": "المجلد الهدف", "actions": "العمليات", "system": "النظام",
                 "total": "إجمالي الملفات", "pdfs": "PDF", "images": "الصور",
                 "preview": "معاينة", "organize": "نظم الآن", "watch": "مراقبة مباشرة",
@@ -1222,7 +1225,7 @@ class MainWindow(QMainWindow):
             self.tray.setContextMenu(menu)
             self.tray.activated.connect(self.on_tray_activated)
             self.tray.show()
-            self.tray.setToolTip("File Organizer PRO v3.2")
+            self.tray.setToolTip("File Organizer FREE v3.2")
         except Exception as e:
             print(f"setup_tray failed: {e}")
             self.tray = None
@@ -1820,7 +1823,7 @@ class MainWindow(QMainWindow):
 
 def parse_args():
     import argparse
-    parser = argparse.ArgumentParser(description="File Organizer PRO v3.2", add_help=False)
+    parser = argparse.ArgumentParser(description="File Organizer FREE v3.2", add_help=False)
     parser.add_argument("folder", nargs="?", help="Folder path")
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--auto", nargs="?", const="60", default=None, help="Auto interval")
